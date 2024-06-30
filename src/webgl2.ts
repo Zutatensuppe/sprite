@@ -6,8 +6,11 @@ export class Context {
   private viewport: Viewport;
   private spriteSize: number = 1;
   private atlas!: TextureAtlas;
+  // private atlas2!: TextureAtlas;
   private sprites!: SpriteBatch;
   private shader!: Shader;
+
+  private bgTex!: WebGLTexture;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -15,9 +18,54 @@ export class Context {
     this.viewport = new Viewport(canvas);
   }
 
-  setup(textures: [string, ImageBitmap][], sprites: SpriteInfo[], spriteSize: number) {
+  setup(
+    textures: [string, ImageBitmap][],
+    texturesBg: [string, ImageBitmap][],
+    sprites: SpriteInfo[],
+    spriteSize: number
+  ) {
     this.spriteSize = spriteSize;
     this.atlas = new TextureAtlas(this.gl, textures);
+    // this.atlas2 = new TextureAtlas(this.gl, texturesBg);
+
+    const bgImage = texturesBg[0][1];
+
+    this.bgTex = this.gl.createTexture()!;
+    this.gl.activeTexture(this.gl.TEXTURE1);
+    this.gl.bindTexture(this.gl.TEXTURE_2D, this.bgTex);
+
+    // Set the parameters so we can render any size image.
+    this.gl.texParameteri(
+      this.gl.TEXTURE_2D,
+      this.gl.TEXTURE_WRAP_S,
+      this.gl.CLAMP_TO_EDGE
+    );
+    this.gl.texParameteri(
+      this.gl.TEXTURE_2D,
+      this.gl.TEXTURE_WRAP_T,
+      this.gl.CLAMP_TO_EDGE
+    );
+    this.gl.texParameteri(
+      this.gl.TEXTURE_2D,
+      this.gl.TEXTURE_MIN_FILTER,
+      this.gl.NEAREST
+    );
+    this.gl.texParameteri(
+      this.gl.TEXTURE_2D,
+      this.gl.TEXTURE_MAG_FILTER,
+      this.gl.NEAREST
+    );
+
+    // Upload the image into the texture.
+    this.gl.texImage2D(
+      this.gl.TEXTURE_2D,
+      0,
+      this.gl.RGBA,
+      this.gl.RGBA,
+      this.gl.UNSIGNED_BYTE,
+      bgImage
+    );
+
     this.sprites = new SpriteBatch(this.gl, sprites, spriteSize, this.atlas);
     this.shader = new Shader(this.gl, vertex, fragment);
 
@@ -50,6 +98,18 @@ export class Context {
     this.shader.setUniform("projection", this.viewport.projection());
     // bind the atlas to texture slot 0
     this.atlas.bind(0);
+    this.gl.uniform1i(
+      this.gl.getUniformLocation(this.shader.program, "atlas"),
+      0
+    );
+
+    this.gl.activeTexture(this.gl.TEXTURE1);
+    this.gl.bindTexture(this.gl.TEXTURE_2D, this.bgTex);
+    this.gl.uniform1i(
+      this.gl.getUniformLocation(this.shader.program, "atlas2"),
+      1
+    );
+
     // draw the sprites
     this.sprites.draw();
   }
@@ -109,6 +169,7 @@ const fragment = `#version 300 es
 precision highp float;
 
 uniform highp sampler2DArray atlas;
+uniform highp sampler2D atlas2;
 
 flat in uint v_tid;
 in vec2 v_texcoord;
@@ -116,7 +177,54 @@ in vec2 v_texcoord;
 out vec4 fragColor;
 
 void main() {
-  fragColor = texture(atlas, vec3(v_texcoord, v_tid));
+  vec2 puzzleOffset = vec2(256 - 64, 256 - 64);
+  vec2 puzzleSize = vec2(128, 128);
+  vec2 puzzleImageSize = vec2(512, 512);
+  vec2 puzzleCoord = puzzleOffset + v_texcoord * puzzleSize;
+  puzzleCoord /= puzzleImageSize; // Normalize to [0, 1] range
+
+
+  vec4 stencil = texture(atlas, vec3(v_texcoord, v_tid));
+  vec4 puzzleImage = texture(atlas2, puzzleCoord);
+    vec4 baseColor = puzzleImage * stencil.a;
+
+    // Edge detection for 3D effect
+    vec2 texelSize = 2.0 / vec2(textureSize(atlas, 0));
+    float left = texture(atlas, vec3(v_texcoord - vec2(texelSize.x, 0.0), v_tid)).a;
+    float right = texture(atlas, vec3(v_texcoord + vec2(texelSize.x, 0.0), v_tid)).a;
+    float up = texture(atlas, vec3(v_texcoord + vec2(0.0, texelSize.y), v_tid)).a;
+    float down = texture(atlas, vec3(v_texcoord - vec2(0.0, texelSize.y), v_tid)).a;
+
+    // Determine if this fragment is on an edge
+    bool isLeftEdge = (stencil.a > 0.5 && left < 0.5);
+    bool isRightEdge = (stencil.a > 0.5 && right < 0.5);
+    bool isTopEdge = (stencil.a > 0.5 && up < 0.5);
+    bool isBottomEdge = (stencil.a > 0.5 && down < 0.5);
+
+    // Create shadow and highlight effect
+    vec4 shadowColor = vec4(0.0, 0.0, 0.0, .5);
+    vec4 highlightColor = vec4(1.0, 1.0, 1.0, .5);
+    vec4 edgeColor = vec4(0.0);
+
+    if (isBottomEdge)
+    {
+        edgeColor += shadowColor;
+    }
+    if (isLeftEdge)
+    {
+        edgeColor += shadowColor;
+    }
+    if (isTopEdge)
+    {
+        edgeColor += highlightColor;
+    }
+    if (isRightEdge)
+    {
+        edgeColor += highlightColor;
+    }
+
+    // Blend the edge color with the base color
+   fragColor = mix(baseColor, edgeColor, edgeColor.a);
 }
 `;
 
@@ -180,7 +288,8 @@ class TextureAtlas {
     if (images.length === 0) {
       throw new Error("Cannot create texture atlas: no images provided");
     }
-
+    gl.enable(gl.SAMPLE_ALPHA_TO_COVERAGE);
+    gl.enable(gl.BLEND);
     // check that all images have the same dimensions
     const firstImage = images[0][1];
     let errors = [];
@@ -436,7 +545,7 @@ type Uniform = {
 
 export class Shader {
   private gl: WebGL2RenderingContext;
-  private program: WebGLProgram;
+  public program: WebGLProgram;
   private uniforms: { [name: string]: Uniform };
 
   constructor(gl: WebGL2RenderingContext, vertex: string, fragment: string) {
@@ -699,6 +808,9 @@ function createSetter(
         // @ts-ignore
         setterFn(location, false, data);
       };
+    }
+    default: {
+      throw new Error(`Unknown uniform type: ${typeInfo[0]}`);
     }
   }
 }
