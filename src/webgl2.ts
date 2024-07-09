@@ -74,15 +74,15 @@ export class Context {
 
   update() {
     // update positions
-    for (let i = 0; i < this.sprites.instances; i++) {
-      let x = this.sprites.x.get(i) + 1;
-      // note: have to account for sprites being renderered from the center
-      // in canvas2d version they are rendered from top left corner
-      if (x - this.spriteSize / 2 > this.viewport.width) {
-        x = -this.spriteSize / 2;
-      }
-      this.sprites.x.set(i, x);
-    }
+    // for (let i = 0; i < this.sprites.instances; i++) {
+    //   let x = this.sprites.x.get(i) + 1;
+    //   // note: have to account for sprites being renderered from the center
+    //   // in canvas2d version they are rendered from top left corner
+    //   if (x - this.spriteSize / 2 > this.viewport.width) {
+    //     x = -this.spriteSize / 2;
+    //   }
+    //   this.sprites.x.set(i, x);
+    // }
   }
 
   render() {
@@ -90,7 +90,7 @@ export class Context {
 
     // update the viewport and clear the screen
     this.gl.viewport(0, 0, this.viewport.width, this.viewport.height);
-    this.gl.clearColor(0, 0, 0, 0);
+    this.gl.clearColor(.4, 0, .4, 1);
     this.gl.clear(this.gl.COLOR_BUFFER_BIT);
 
     // bind the shader and update the uniforms
@@ -145,24 +145,28 @@ layout(location = 2) in uint tid;
 layout(location = 3) in float x; // world space
 layout(location = 4) in float y; // world space
 
+layout(location = 5) in vec2 puzcoord;
+
 flat out uint v_tid;
 out vec2 v_texcoord;
+out vec2 v_puzcoord;
 
 const float SPRITE_SIZE = 64.0;
+const float PADDING_SIZE = 20.0;
 
 void main() {
-  v_tid = tid;
-  v_texcoord = texcoord;
+    v_tid = tid;
+    v_texcoord = texcoord;
+    v_puzcoord = puzcoord;
 
-  mat4 model = mat4(
-    SPRITE_SIZE, 0, 0, 0,
-    0, SPRITE_SIZE, 0, 0,
-    0, 0, 1, 0,
-    x, y, 0, 1
-  );
+    // Calculate the world position with the correct sprite size
+    vec2 scaledPosition = position * SPRITE_SIZE;
+    vec2 worldPosition = vec2(x, y) + scaledPosition;
 
-  gl_Position = projection * model * vec4(position, 0, 1);
+    // Apply the model and projection transformations
+    gl_Position = projection * vec4(worldPosition, 0.0, 1.0);
 }
+
 `;
 
 const fragment = `#version 300 es
@@ -173,27 +177,40 @@ uniform highp sampler2D atlas2;
 
 flat in uint v_tid;
 in vec2 v_texcoord;
+in vec2 v_puzcoord;
 
 out vec4 fragColor;
 
+const float SPRITE_SIZE = 64.0;
+const float PADDING_SIZE = 20.0;
+const float FULL_SIZE = SPRITE_SIZE + 2.0 * PADDING_SIZE;
+const vec2 PIECE_SIZE = vec2(SPRITE_SIZE, SPRITE_SIZE);
+const vec2 PUZZLE_IMAGE_SIZE = vec2(512.0, 512.0);
+
 void main() {
-  vec2 puzzleOffset = vec2(256 - 64, 256 - 64);
-  vec2 puzzleSize = vec2(128, 128);
-  vec2 puzzleImageSize = vec2(512, 512);
-  vec2 puzzleCoord = puzzleOffset + v_texcoord * puzzleSize;
-  puzzleCoord /= puzzleImageSize; // Normalize to [0, 1] range
+    // Map texcoord to the stencil texture, correcting for the actual size
+    vec2 adjustedTexcoord = (v_texcoord * SPRITE_SIZE + PADDING_SIZE) / FULL_SIZE;
 
+    // Calculate the position in the puzzle image
+    vec2 puzzleCoord = v_puzcoord + v_texcoord * PIECE_SIZE;
+    puzzleCoord /= PUZZLE_IMAGE_SIZE; // Normalize to [0, 1] range
 
-  vec4 stencil = texture(atlas, vec3(v_texcoord, v_tid));
-  vec4 puzzleImage = texture(atlas2, puzzleCoord);
+    // Sample the stencil and puzzle image
+    vec4 stencil = texture(atlas, vec3(adjustedTexcoord, float(v_tid)));
+    vec4 puzzleImage = texture(atlas2, puzzleCoord);
+
+    // Combine stencil and puzzle image
     vec4 baseColor = puzzleImage * stencil.a;
+
+    // baseColor = stencil;
+
 
     // Edge detection for 3D effect
     vec2 texelSize = 2.0 / vec2(textureSize(atlas, 0));
-    float left = texture(atlas, vec3(v_texcoord - vec2(texelSize.x, 0.0), v_tid)).a;
-    float right = texture(atlas, vec3(v_texcoord + vec2(texelSize.x, 0.0), v_tid)).a;
-    float up = texture(atlas, vec3(v_texcoord + vec2(0.0, texelSize.y), v_tid)).a;
-    float down = texture(atlas, vec3(v_texcoord - vec2(0.0, texelSize.y), v_tid)).a;
+    float left = texture(atlas, vec3(adjustedTexcoord - vec2(texelSize.x, 0.0), v_tid)).a;
+    float right = texture(atlas, vec3(adjustedTexcoord + vec2(texelSize.x, 0.0), v_tid)).a;
+    float up = texture(atlas, vec3(adjustedTexcoord + vec2(0.0, texelSize.y), v_tid)).a;
+    float down = texture(atlas, vec3(adjustedTexcoord - vec2(0.0, texelSize.y), v_tid)).a;
 
     // Determine if this fragment is on an edge
     bool isLeftEdge = (stencil.a > 0.5 && left < 0.5);
@@ -202,30 +219,16 @@ void main() {
     bool isBottomEdge = (stencil.a > 0.5 && down < 0.5);
 
     // Create shadow and highlight effect
-    vec4 shadowColor = vec4(0.0, 0.0, 0.0, .5);
-    vec4 highlightColor = vec4(1.0, 1.0, 1.0, .5);
     vec4 edgeColor = vec4(0.0);
-
-    if (isBottomEdge)
-    {
-        edgeColor += shadowColor;
-    }
-    if (isLeftEdge)
-    {
-        edgeColor += shadowColor;
-    }
-    if (isTopEdge)
-    {
-        edgeColor += highlightColor;
-    }
-    if (isRightEdge)
-    {
-        edgeColor += highlightColor;
+    if (isBottomEdge || isLeftEdge) {
+        edgeColor += vec4(0.0, 0.0, 0.0, .5);
+    } else if (isTopEdge || isRightEdge) {
+        edgeColor += vec4(1.0, 1.0, 1.0, .5);
     }
 
-    // Blend the edge color with the base color
-   fragColor = mix(baseColor, edgeColor, edgeColor.a);
+    fragColor = mix(baseColor, edgeColor, edgeColor.a);
 }
+
 `;
 
 // keeps track of canvas size and produces a projection matrix
@@ -385,6 +388,8 @@ class SpriteBatch {
   // Per-instance 2D position
   x: Buffer<Float32>;
   y: Buffer<Float32>;
+  
+  puzcoord: Buffer<Float32>;
 
   // Attribute set, used to bind the above buffers to the shader.
   attribs: AttributeSet;
@@ -397,19 +402,35 @@ class SpriteBatch {
   ) {
     this.gl = gl;
 
+
     const tid = new Uint8Array(sprites.map((s) => atlas.getId(s.texture)!));
     const x = new Float32Array(sprites.map((s) => s.x + spriteSize / 2));
     const y = new Float32Array(sprites.map((s) => s.y + spriteSize / 2));
+    const coords = []
+    let tmpX = 0
+    let tmpY = 0
+    for (const sprite of sprites) {
+      coords.push(...[
+        tmpX * 64, tmpY * 64
+      ])
+      tmpX+=1
+      if (tmpX % 8 === 0) {
+        tmpY+=1
+        tmpX = 0
+      }
+    }
+    const puzcoord = new Float32Array(coords);
 
     this.instances = sprites.length;
     this.quad = new Buffer(gl, QUAD, "static");
     this.tid = new Buffer(gl, tid, "static");
     this.x = new Buffer(gl, x, "dynamic");
     this.y = new Buffer(gl, y, "dynamic");
+    this.puzcoord = new Buffer(gl, puzcoord, "dynamic");
 
     this.attribs = new AttributeSet(gl, [
       {
-        buffer: this.quad,
+        buffer: this.quad, // position, texcoord
         attributes: [vec2Attrib(0), vec2Attrib(1)],
       },
       {
@@ -424,12 +445,17 @@ class SpriteBatch {
         buffer: this.y,
         attributes: [floatAttrib(4, 1)],
       },
+      {
+        buffer: this.puzcoord,
+        attributes: [vec2Attrib(5, 1)],
+      },
     ]);
   }
 
   draw() {
     this.x.flush();
     this.y.flush();
+    this.puzcoord.flush
 
     this.attribs.bind();
     this.gl.drawArraysInstanced(this.gl.TRIANGLES, 0, 6, this.instances);
@@ -440,6 +466,7 @@ class SpriteBatch {
     this.tid.destroy();
     this.x.destroy();
     this.y.destroy();
+    this.puzcoord.destroy();
     this.attribs.destroy();
   }
 }

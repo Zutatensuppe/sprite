@@ -123,24 +123,29 @@ const createStencilTextures = async () => {
   }
 
   const shapes = [];
+  shapes.push(
+    // createPathForShape({ top: 0, bottom: 0, left: 0, right: 0 }, 0, 0, 128)
+    // createPathForShape({ top: 0, bottom: 0, left: 0, right: 0 }, 20, 20, 104)
+    // createPathForShape({ top: 0, bottom: 0, left: 0, right: 0 }, SPRITE_DRAW_OFFSET, SPRITE_DRAW_OFFSET, SPRITE_SIZE)
+  );
 
   for (let top = -1; top <= 1; top++) {
     for (let bottom = -1; bottom <= 1; bottom++) {
       for (let left = -1; left <= 1; left++) {
         for (let right = -1; right <= 1; right++) {
           shapes.push(
-            createPathForShape({ top, bottom, left, right }, 20, 20, 88)
+            createPathForShape({ top, bottom, left, right }, SPRITE_DRAW_OFFSET, SPRITE_DRAW_OFFSET, SPRITE_SIZE)
           );
         }
       }
     }
   }
 
-  const res = [];
+  const res: [string, ImageBitmap][] = [];
   for (const [index, shape] of shapes.entries()) {
     const canvas = document.createElement("canvas");
-    canvas.width = 128;
-    canvas.height = 128;
+    canvas.width = SPRITE_SIZE + 2* SPRITE_DRAW_OFFSET;
+    canvas.height = SPRITE_SIZE + 2 * SPRITE_DRAW_OFFSET;
     const ctx = canvas.getContext("2d")!;
     ctx.fillStyle = "black";
     ctx.fill(shape);
@@ -150,7 +155,9 @@ const createStencilTextures = async () => {
 };
 
 const SPRITE_SIZE = 64;
-const DRAW_OFFSET = 0; // 20;
+const SPRITE_DRAW_OFFSET = 20;
+
+const SPRITE_POS_OFFSET = 0;
 const textures = await createStencilTextures();
 const texturesBg: [string, ImageBitmap][] = await Promise.all([
   // puzzle texture
@@ -168,8 +175,7 @@ function spriteAt(
   const x = i % cols;
   const y = Math.floor(i / cols);
   const texture = textures[i % textures.length][0];
-
-  return { texture, x: x * (SPRITE_SIZE - DRAW_OFFSET), y: y * (SPRITE_SIZE - DRAW_OFFSET) };
+  return { texture, x: x * (SPRITE_SIZE + SPRITE_POS_OFFSET) + SPRITE_POS_OFFSET, y: y * (SPRITE_SIZE + SPRITE_POS_OFFSET) + SPRITE_POS_OFFSET };
 }
 
 function spriteGrid(
@@ -222,7 +228,7 @@ function start(renderer: typeof Context, count: number) {
   ctx.setup(
     textures,
     texturesBg,
-    spriteGrid(textures, rows, cols),
+    spriteGrid(textures, 4, 4),
     SPRITE_SIZE
   );
 
